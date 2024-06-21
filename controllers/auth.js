@@ -139,6 +139,12 @@ exports.register = async(req, res) => {
   console.log(req.body);
   const { Name, Email, phno, Password, confirmPassword } = req.body;
   try {
+
+    if (Password !== confirmPassword) {
+      // return res.status(400).send('Passwords do not match');
+      // Alternatively, you can render a specific view with an error message
+      return res.render('register.ejs', { warning: 'Passwords do not match' });
+    }
     // Generate OTP
     const otp = generateOTP();
 
@@ -255,6 +261,8 @@ exports.update = (req, res) => {
   }
 }
 
+var finalConductor = "";
+
 var userId = 0;
 exports.userdata = (req, res) => {
 const token = req.cookies.userSave; // Get the JWT token from the cookie
@@ -291,7 +299,8 @@ const token = req.cookies.userSave; // Get the JWT token from the cookie
         }
 
         const conductorName = result[0].name; // Get the conductor name from the query result
-
+        finalConductor = conductorName;
+        
         // Render the response with the conductor name
         res.render('conductor.ejs', { warning: "Phone Number Inserted Successfully", name: conductorName });
       });
@@ -367,8 +376,22 @@ exports.getVotingLink = (req, res) => {
   const baseUrl = 'http://localhost:8000/voter-login';
   const votingLink = `${baseUrl}/${generatedToken}/${eId}`;
 
-  console.log(votingLink);
-  res.status(200).send(votingLink);
+  // Fetch conductor name to render in the template
+  db.query("SELECT name FROM register WHERE id = ?", [userId], (err, result) => {
+    if (err) {
+      console.error("Error fetching conductor name:", err);
+      return res.status(500).send("Internal Server Error");
+    }
+
+    if (result.length === 0) {
+      return res.status(404).send("Conductor not found");
+    }
+
+    const conductorName = result[0].name; // Get the conductor name from the query result
+
+    // Render the response with the conductor name and voting link
+    res.render('conductor.ejs', { warning: `Voting link generated: ${votingLink}`, name: conductorName });
+  });
 };
 
 exports.authenticateAndRenderVoterPage = (req, res, next) => {
@@ -429,7 +452,7 @@ exports.authenticateAndRenderVoterPage = (req, res, next) => {
           const candidates = candidateResults.map(candidate => candidate.name);
 
           // Render the voter page with the retrieved candidate names
-          res.render('voter', { candidates: candidates });
+          res.render('voter', { candidates: candidates , message : "" });
         });
       });
     });
@@ -443,34 +466,44 @@ exports.castVote = (req, res) => {
 
   // Check if the user has already voted in this session
   if (req.session.hasVoted) {
-    return res.status(400).json({ success: false, message: "You have already voted in this session" });
+    return res.render('message.ejs', { message: "You have already voted in this session" });
   }
 
   if (!electionId) {
-    return res.status(400).json({ success: false, message: "Election ID not found in session" });
+    return res.render('message.ejs', { message: "ElectionId not in the session" });
   }
 
-  db.query("SELECT id FROM candidates WHERE name = ? AND election_id = ?", [candidate, electionId], (err, candidateResult) => {
+  db.query("SELECT id FROM candidates WHERE election_id = ?", [electionId], (err, candidateResults) => {
     if (err) {
-      console.error("Error retrieving candidate ID:", err);
-      return res.status(500).json({ success: false, message: "Failed to submit vote" });
+      console.error("Error retrieving candidates:", err);
+      return res.status(500).json({ success: false, message: "Failed to fetch candidates" });
     }
 
-    if (candidateResult.length === 0) {
-      return res.status(404).json({ success: false, message: "Candidate not found" });
-    }
+    const candidates = candidateResults.map(candidate => candidate.name);
 
-    const candidateId = candidateResult[0].id;
-    db.query("UPDATE candidates SET votes = votes + 1 WHERE id = ? AND election_id = ?", [candidateId, electionId], (err, result) => {
+    db.query("SELECT id FROM candidates WHERE name = ? AND election_id = ?", [candidate, electionId], (err, candidateResult) => {
       if (err) {
-        console.error("Error updating vote count:", err);
+        console.error("Error retrieving candidate ID:", err);
         return res.status(500).json({ success: false, message: "Failed to submit vote" });
       }
-      
-      // Mark the user as having voted in this session
-      req.session.hasVoted = true;
 
-      return res.status(200).json({ success: true, message: "Vote submitted successfully" });
+      if (candidateResult.length === 0) {
+        return res.status(404).json({ success: false, message: "Candidate not found" });
+      }
+
+      const candidateId = candidateResult[0].id;
+      db.query("UPDATE candidates SET votes = votes + 1 WHERE id = ? AND election_id = ?", [candidateId, electionId], (err, result) => {
+        if (err) {
+          console.error("Error updating vote count:", err);
+          return res.status(500).json({ success: false, message: "Failed to submit vote" });
+        }
+        
+        // Mark the user as having voted in this session
+        req.session.hasVoted = true;
+
+        // Render the voter page with candidates and success message
+        return res.render('message.ejs', { message: "Successfully Voted" });
+      });
     });
   });
 };
